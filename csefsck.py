@@ -5,6 +5,7 @@ import time
 
 
 usedBlocks = set()
+freeBlocks = set()
 
 # Get JSON representation for a directory entry from a fusedata.# block
 def getjsondir(string):
@@ -48,7 +49,7 @@ def getjson(string):
 
 # ------------------------------------ CHECK DEVICE ID ---------------------------------
 def checkDeviceID():
-    print "Checking device Id ......."
+    print "Checking DEVICE ID ..."
     result = "true"
     blockfile = open("FS/fusedata.0", "r")
     fileConent = blockfile.read()
@@ -61,9 +62,9 @@ def checkDeviceID():
 
     blockfile.close()
     if devId == 20:
-        print "Device ID correct\n"
+        print "\tDevice ID correct\n"
     else:
-        print "Incorrect Device ID\n"
+        print "\tIncorrect Device ID\n"
 
 
 
@@ -82,7 +83,7 @@ def DirectoryTraversal(blockNumber):
   directory  = 	readDirectory(blockNumber)
 
   addToUsedBlocks(blockNumber)
-  print "ADDED BLOCK - " + blockNumber
+  #print "ADDED BLOCK - " + blockNumber
   
 #------------- Check times --------------------------------
   if float(time.time()) - float(directory['ctime']) < 0 :
@@ -127,11 +128,16 @@ def DirectoryTraversal(blockNumber):
         # "Traverse through sub directories"
         if linkdetails[0] == 'd':
             if linkdetails [1] not in ['.','..']:
-                print "checking DIRECTORY ... %s" %(linkdetails[1])
+                print "\nchecking DIRECTORY ... %s" %(linkdetails[1])
                 DirectoryTraversal(linkdetails[2])
         if linkdetails[0] == 'f':
-                print "checking FILE..... %s" %(linkdetails[1])
-                mFile =  json.loads(ReadFile(linkdetails[2]))
+                print "\nchecking FILE ... %s" %(linkdetails[1])
+                try:
+                    mFile =  json.loads(ReadFile(linkdetails[2]))
+                except Exception, e:
+                    print "\tError in reading file info"
+                    continue
+                
                 #------------- Check times --------------------------------
                 if float(time.time()) - float(mFile['ctime']) < 0 :
                     print "\tInvalid ctime"
@@ -139,17 +145,44 @@ def DirectoryTraversal(blockNumber):
                     print "\tInvalid atime"
                 if float(time.time()) - float(mFile['mtime']) < 0 :
                     print "\tInvalid mtime"
-
                 mBlock = str(mFile['location'])
+
                 if int(mFile['indirect']) == 1:
-                    if checkArray(mBlock) == False:
-                        print "Invalid indirect value/Incorrect location entry"
+                    arrayCount = checkArray(mBlock)
+                    if arrayCount == -1:
+                        print "\tInvalid indirect value/Incorrect location entry"
+                    else:
+                        if (checkSize(arrayCount,int(mFile['indirect']) ,int(mFile['size']))) == False:
+                            print "\t Invalid Size of file"
                 if int(mFile['indirect']) == 0:
-                    ReadFile(mBlock)
+                    if (checkSize(1,int(mFile['indirect']) ,int(mFile['size']))) == False:
+                            print "\t Invalid Size of file"
+                    try:
+                        ReadFile(mBlock)
+                    except Exception, e:
+                        print "\tError in reading file"
+                        continue
+
+                   
+
+
+# -------------------------------- CHECK SIZE ------------------------------------------
+def checkSize(blockCount, indirectValue, size):
+    result = True
+    blocksize = 4096
+    if indirectValue == 0:
+        if size <= 0 or size >= blocksize:
+            return False
+    if indirectValue == 1:
+          if size >= (blocksize * blockCount):
+            return False
+          if size <= (blocksize * (blockCount - 1) ):
+            return False
+          
 
 # -------------------------------- CHECK IF ARRAY --------------------------------------
 def checkArray(blockNumber):
-    result = True
+    result = 0
     blockfile = open("FS/fusedata." + blockNumber, "r")
     addToUsedBlocks(blockNumber)
     fileContent = blockfile.read()
@@ -161,13 +194,16 @@ def checkArray(blockNumber):
             addToUsedBlocks(block)
 
         except:
-            result = False
+            result = -1
             blockfile.close()
-            return result
+            #return result
 
     blockfile.close()
     
-    return result
+    if result == -1:
+        return -1
+    else:
+        return len(blocks)
 
 # --------------------------------- READ DIRECTORY ---------------------------------------
 def readDirectory(blockNumber):
@@ -179,6 +215,7 @@ def readDirectory(blockNumber):
 
 # --------------------------------- READ FILE ---------------------------------------------	
 def  ReadFile(blockNumber):
+    
     blockfile = open("FS/fusedata." + blockNumber, "r")
     fileContent = blockfile.read()
     mFile = getjson(fileContent.strip())
@@ -194,26 +231,55 @@ def  ReadBlocks(blockNumber):
     addToUsedBlocks(blockNumber)
     return fileContent
 
-# ------------------------------- FREE BLOCK MANAGEMENT ------------------------------------
+# ------------------------------- BLOCK MANAGEMENT ------------------------------------
 def getFreeBlocks():
     blockList = []
     for i in xrange(1,26):
         temp = map(int,ReadBlocks(str(i)).strip().split(","))
         blockList = blockList + temp
-    #print blockList
+
+    global freeBlocks
+    for block in blockList:
+        freeBlocks.add(block)
 
 def addToUsedBlocks(blockNumber):
     global usedBlocks
-    usedBlocks.add(blockNumber)
+    usedBlocks.add(int(blockNumber))    
+
+def checkBlocks():
+    print "\nChecking BLOCKS ... "
+    isError = False
+    try:
+        commonBlocks = freeBlocks.intersection(usedBlocks)
+        if len(commonBlocks) > 0:
+            print "\tOverlapping free and used blocks : " 
+            for block in commonBlocks:
+                print "\t%s" %(block)
+            isError = True
+    except Exception, e:
+        print "\tError in blocks list"
+        isError = True
+
+    if  len(freeBlocks | usedBlocks) != 10000:
+        print "\tNot all free blocks are on the list. Total number of blocks (Free and Used ) found : " + str(len(freeBlocks | usedBlocks)) + ". The total should be 10000. \n"
+        isError = True
+
+    if isError == False:
+        print "\tNo errors found in blocks list\n"
+
+    print usedBlocks
+   
 
 #------------- Call check methods one after the other ------------------------------------------
-print "\n ----------------------- File Check Results -----------------\n"
+print "\n ----------------------- File System Check Results -----------------\n"
 
 checkDeviceID()
+global usedBlocks
+usedBlocks.add(0)
 print "checking DIRECTORY ... %s" %("root")
 DirectoryTraversal("26")
 getFreeBlocks()
-print usedBlocks
+checkBlocks()
 
 
 
